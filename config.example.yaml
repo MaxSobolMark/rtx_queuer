@@ -1,0 +1,30 @@
+# RTX Queuer Configuration
+
+# This queuer's index (0, 1, 2, ...)
+# Lower-index queuers deallocate first when lab members need GPUs
+queuer_index: 0
+
+# Path to the placeholder script to run
+# This script should sleep or do minimal work
+script_path: /path/to/placeholder.sh
+
+# SLURM partition to manage
+partition: rl
+
+# GPU type to request
+gpu_type: RTX_PRO_6000
+
+# GPUs per placeholder job
+gpus_per_job: 1
+
+# Number of jobs to maintain per queuer instance
+target_jobs: 8
+
+# Job time limit (SLURM format)
+time_limit: "2-00:00:00"
+
+# How often to check queue status (seconds)
+poll_interval: 30
+
+# Job name prefix (shared across all queuer instances)
+job_prefix: rtx_queuer
