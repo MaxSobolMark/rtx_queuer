@@ -83,7 +83,11 @@ class Queuer:
         if gpus_to_free <= 0:
             return 0
 
-        log(f"External jobs pending, need to free {gpus_to_free} GPUs")
+        # Log details about who is requesting GPUs
+        requesters = []
+        for job in pending_external:
+            requesters.append(f"{job.user}:{job.job_id}({job.name}, {job.gpus}gpu)")
+        log(f"External jobs pending, need to free {gpus_to_free} GPUs. Requested by: {', '.join(requesters)}")
 
         my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
         to_cancel = select_jobs_to_cancel(my_jobs, gpus_to_free)
