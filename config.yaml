@@ -1,5 +1,5 @@
 queuer_index: 0
-script_path: scripts/gpu_placeholder.py
+script_path: scripts/run_placeholder.sh
 partition: rl
 gpu_type: RTX_PRO_6000
 gpus_per_job: 1

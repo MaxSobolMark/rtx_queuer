@@ -1,0 +1,16 @@
+[project]
+name = "rtx-queuer"
+version = "0.1.0"
+description = "SLURM GPU reservation manager"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "torch>=2.6.0",
+]
+
+[tool.uv]
+find-links = ["https://download.pytorch.org/whl/nightly/cu128"]
