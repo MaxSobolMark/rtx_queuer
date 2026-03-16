@@ -110,14 +110,21 @@ class Queuer:
 
         log(f"Status: {running} running, {pending} pending, target={self.config.target_jobs}")
 
-        # Submit jobs if under target
+        # Handle deallocation for external jobs FIRST
+        # Don't submit new jobs if there are external jobs waiting
+        cancelled = self.handle_deallocation(jobs)
+        if cancelled > 0:
+            return  # Don't submit new jobs this cycle
+
+        # Only submit jobs if under target AND no external jobs pending
+        pending_external = get_pending_external_jobs(jobs, self.config.job_prefix)
+        if pending_external:
+            return  # External jobs waiting, don't submit
+
         if total < self.config.target_jobs:
             to_submit = self.config.target_jobs - total
             log(f"Under target, submitting {to_submit} jobs")
             self.submit_placeholder_jobs(to_submit)
-
-        # Handle deallocation for external jobs
-        self.handle_deallocation(jobs)
 
     def run(self) -> None:
         """Run the daemon loop."""
