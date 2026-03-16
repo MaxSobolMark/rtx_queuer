@@ -10,6 +10,7 @@ dependencies = [
 [project.optional-dependencies]
 gpu = [
     "torch>=2.6.0",
+    "numpy",
 ]
 
 [tool.uv]
