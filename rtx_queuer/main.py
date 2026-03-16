@@ -9,10 +9,9 @@ from datetime import datetime
 
 from .config import Config, load_config
 from .coordinator import (
+    get_external_jobs_blocked_on_resources,
     get_my_jobs,
-    get_pending_external_jobs,
     select_jobs_to_cancel,
-    select_pending_jobs_to_cancel,
 )
 from .slurm import cancel_job, get_queue_status, submit_job
 
@@ -63,40 +62,34 @@ class Queuer:
                 submitted += 1
         return submitted
 
-    def handle_deallocation(self, jobs: list, effective_target: int) -> int:
-        """Cancel jobs to reach effective target.
+    def handle_deallocation(self, jobs: list, blocked_external: list) -> int:
+        """Cancel running jobs to free GPUs for blocked external jobs.
 
         Returns number of jobs cancelled.
         """
+        if not blocked_external:
+            return 0
+
+        gpus_needed = sum(j.gpus for j in blocked_external)
         my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
         my_running = [j for j in my_jobs if j.is_running]
-        my_pending = [j for j in my_jobs if j.is_pending]
 
+        # Only cancel if we have running jobs that could be blocking
+        gpus_to_free = min(gpus_needed, len(my_running))
+        if gpus_to_free <= 0:
+            return 0
+
+        # Log details about who is requesting GPUs
+        requesters = []
+        for job in blocked_external:
+            requesters.append(f"{job.user}:{job.job_id}({job.name}, {job.gpus}gpu)")
+        log(f"External jobs blocked on resources, freeing {gpus_to_free} GPUs. Requested by: {', '.join(requesters)}")
+
+        to_cancel = select_jobs_to_cancel(my_jobs, gpus_to_free)
         cancelled = 0
-
-        # Cancel running jobs if over effective target
-        if len(my_running) > effective_target:
-            gpus_to_free = len(my_running) - effective_target
-            pending_external = get_pending_external_jobs(jobs, self.config.job_prefix)
-
-            # Log details about who is requesting GPUs
-            requesters = []
-            for job in pending_external:
-                requesters.append(f"{job.user}:{job.job_id}({job.name}, {job.gpus}gpu)")
-            log(f"External jobs pending, need to free {gpus_to_free} GPUs. Requested by: {', '.join(requesters)}")
-
-            to_cancel = select_jobs_to_cancel(my_jobs, gpus_to_free)
-            for job in to_cancel:
-                if cancel_job(job.job_id):
-                    log(f"Cancelled job {job.job_id} ({job.name})")
-                    cancelled += 1
-
-        # Cancel pending jobs that would exceed effective target
-        pending_to_keep = max(0, effective_target - len(my_running) + cancelled)
-        pending_to_cancel = select_pending_jobs_to_cancel(my_jobs, pending_to_keep)
-        for job in pending_to_cancel:
+        for job in to_cancel:
             if cancel_job(job.job_id):
-                log(f"Cancelled pending job {job.job_id} ({job.name})")
+                log(f"Cancelled job {job.job_id} ({job.name})")
                 cancelled += 1
 
         return cancelled
@@ -109,23 +102,17 @@ class Queuer:
         running, pending = self.get_my_job_count(jobs)
         total = running + pending
 
-        # Calculate effective target (reserve capacity for external pending jobs)
-        pending_external = get_pending_external_jobs(jobs, self.config.job_prefix)
-        external_gpus_needed = sum(j.gpus for j in pending_external)
-        effective_target = max(0, self.config.target_jobs - external_gpus_needed)
+        log(f"Status: {running} running, {pending} pending, target={self.config.target_jobs}")
 
-        log(f"Status: {running} running, {pending} pending, target={self.config.target_jobs}, effective={effective_target}")
+        # Deallocate if external jobs are blocked on resources
+        blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix)
+        if blocked_external:
+            self.handle_deallocation(jobs, blocked_external)
 
-        # Handle deallocation if we're over the effective target
-        if running > effective_target or pending > 0:
-            cancelled = self.handle_deallocation(jobs, effective_target)
-            if cancelled > 0:
-                return  # Don't submit new jobs this cycle
-
-        # Submit jobs up to effective target
-        if total < effective_target:
-            to_submit = effective_target - total
-            log(f"Under effective target, submitting {to_submit} jobs")
+        # Always submit up to target - SLURM priority ensures external jobs get resources first
+        if total < self.config.target_jobs:
+            to_submit = self.config.target_jobs - total
+            log(f"Under target, submitting {to_submit} jobs")
             self.submit_placeholder_jobs(to_submit)
 
     def run(self) -> None:

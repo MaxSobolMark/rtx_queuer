@@ -12,6 +12,8 @@ class Job:
     state: str
     partition: str
     gpus: int
+    pending_reason: str = ""
+    submit_time: str = ""  # ISO format from SLURM
 
     @property
     def is_running(self) -> bool:
@@ -20,6 +22,11 @@ class Job:
     @property
     def is_pending(self) -> bool:
         return self.state == "PENDING"
+
+    @property
+    def is_blocked_on_resources(self) -> bool:
+        """True if job is pending because it's waiting for resources (GPUs)."""
+        return self.is_pending and self.pending_reason == "Resources"
 
 
 def run_command(cmd: list[str]) -> str:
@@ -30,11 +37,11 @@ def run_command(cmd: list[str]) -> str:
 
 def get_queue_status(partition: str) -> list[Job]:
     """Get all jobs in the partition using squeue."""
-    # Format: JobID|Name|User|State|Partition|Gres
+    # Format: JobID|Name|User|State|Partition|Gres|Reason|SubmitTime
     cmd = [
         "squeue",
         "-p", partition,
-        "-o", "%A|%j|%u|%T|%P|%b",
+        "-o", "%A|%j|%u|%T|%P|%b|%r|%V",
         "--noheader",
     ]
     try:
@@ -47,10 +54,10 @@ def get_queue_status(partition: str) -> list[Job]:
         if not line:
             continue
         parts = line.split("|")
-        if len(parts) < 6:
+        if len(parts) < 8:
             continue
 
-        job_id, name, user, state, part, gres = parts[:6]
+        job_id, name, user, state, part, gres, reason, submit_time = parts[:8]
 
         # Parse GPU count from gres (e.g., "gpu:RTX_PRO_6000:1")
         gpus = 0
@@ -67,6 +74,8 @@ def get_queue_status(partition: str) -> list[Job]:
             state=state.strip(),
             partition=part.strip(),
             gpus=gpus,
+            pending_reason=reason.strip(),
+            submit_time=submit_time.strip(),
         ))
 
     return jobs

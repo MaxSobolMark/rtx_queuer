@@ -45,6 +45,18 @@ def get_pending_external_jobs(jobs: list[Job], prefix: str) -> list[Job]:
     ]
 
 
+def get_external_jobs_blocked_on_resources(jobs: list[Job], prefix: str) -> list[Job]:
+    """Get external jobs that are actually blocked waiting for GPUs.
+
+    Only these jobs need us to deallocate - jobs pending for other reasons
+    (Priority, QOS limits, etc.) are not blocked by our jobs.
+    """
+    return [
+        j for j in jobs
+        if j.is_blocked_on_resources and parse_job_index(j.name, prefix) is None
+    ]
+
+
 def calculate_gpus_to_deallocate(
     pending_external: list[Job],
     my_index: int,
