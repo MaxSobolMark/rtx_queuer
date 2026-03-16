@@ -6,4 +6,4 @@ gpus_per_job: 1
 target_jobs: 24
 time_limit: "2-00:00:00"
 poll_interval: 30
-job_prefix: rtx_queuer
+job_prefix: hyperparam_search
