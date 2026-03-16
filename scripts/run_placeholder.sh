@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --output=/home/jsobolma/rtx_queuer/slurm-%j.out
+#SBATCH --output=/home/%u/rtx_queuer/slurm-%j.out
 
 cd ~/rtx_queuer
 export PYTHONUNBUFFERED=1
