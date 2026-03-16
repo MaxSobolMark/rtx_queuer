@@ -18,7 +18,7 @@ gpu_type: RTX_PRO_6000
 gpus_per_job: 1
 
 # Number of jobs to maintain per queuer instance
-target_jobs: 24
+target_jobs: 10
 
 # Job time limit (SLURM format)
 time_limit: "2-00:00:00"

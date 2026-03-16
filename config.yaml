@@ -3,7 +3,7 @@ script_path: scripts/run_placeholder.sh
 partition: rl
 gpu_type: RTX_PRO_6000
 gpus_per_job: 1
-target_jobs: 24
+target_jobs: 10
 time_limit: "2-00:00:00"
 poll_interval: 30
 job_prefix: hyperparam_search

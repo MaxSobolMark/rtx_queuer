@@ -45,7 +45,7 @@ def load_config(config_path: str | Path) -> Config:
         partition=data.get("partition", "rl"),
         gpu_type=data.get("gpu_type", "RTX_PRO_6000"),
         gpus_per_job=data.get("gpus_per_job", 1),
-        target_jobs=data.get("target_jobs", 24),
+        target_jobs=data.get("target_jobs", 10),
         time_limit=data.get("time_limit", "2-00:00:00"),
         poll_interval=data.get("poll_interval", 30),
         job_prefix=data.get("job_prefix", "rtx_queuer"),
