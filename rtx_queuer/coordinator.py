@@ -80,9 +80,10 @@ def calculate_gpus_to_deallocate(
 
 
 def select_jobs_to_cancel(jobs: list[Job], gpus_needed: int) -> list[Job]:
-    """Select which running jobs to cancel to free the required GPUs.
+    """Select jobs to cancel to free the required GPUs.
 
-    Only cancels running jobs since pending jobs don't hold GPUs.
+    Cancels running jobs to free GPUs, plus pending jobs to prevent
+    them from grabbing the freed GPUs before external jobs can.
     """
     if gpus_needed <= 0:
         return []
@@ -90,11 +91,16 @@ def select_jobs_to_cancel(jobs: list[Job], gpus_needed: int) -> list[Job]:
     to_cancel = []
     gpus_freed = 0
 
+    # Cancel running jobs to free GPUs
     running = [j for j in jobs if j.is_running]
     for job in running:
         if gpus_freed >= gpus_needed:
             break
         to_cancel.append(job)
         gpus_freed += job.gpus
+
+    # Also cancel pending queuer jobs so they don't grab freed GPUs
+    pending = [j for j in jobs if j.is_pending]
+    to_cancel.extend(pending)
 
     return to_cancel
