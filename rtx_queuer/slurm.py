@@ -79,6 +79,7 @@ def submit_job(
     gpu_type: str,
     gpus: int,
     time_limit: str,
+    qos: str | None = None,
 ) -> str | None:
     """Submit a job using sbatch. Returns job ID or None on failure."""
     cmd = [
@@ -87,8 +88,10 @@ def submit_job(
         "--partition", partition,
         "--gres", f"gpu:{gpu_type}:{gpus}",
         "--time", time_limit,
-        script_path,
     ]
+    if qos:
+        cmd.extend(["--qos", qos])
+    cmd.append(script_path)
     try:
         output = run_command(cmd)
         # Output: "Submitted batch job 12345"

@@ -17,6 +17,7 @@ class Config:
     time_limit: str
     poll_interval: int
     job_prefix: str
+    qos: str | None
 
     def __post_init__(self):
         if self.queuer_index < 0:
@@ -48,4 +49,5 @@ def load_config(config_path: str | Path) -> Config:
         time_limit=data.get("time_limit", "2-00:00:00"),
         poll_interval=data.get("poll_interval", 30),
         job_prefix=data.get("job_prefix", "rtx_queuer"),
+        qos=data.get("qos"),
     )

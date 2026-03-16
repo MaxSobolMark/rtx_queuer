@@ -57,6 +57,7 @@ class Queuer:
                 gpu_type=self.config.gpu_type,
                 gpus=self.config.gpus_per_job,
                 time_limit=self.config.time_limit,
+                qos=self.config.qos,
             )
             if job_id:
                 log(f"Submitted job {job_id} ({job_name})")

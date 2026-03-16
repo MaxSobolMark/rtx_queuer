@@ -28,3 +28,6 @@ poll_interval: 30
 
 # Job name prefix (shared across all queuer instances)
 job_prefix: rtx_queuer
+
+# QOS (Quality of Service) for job submission (optional)
+# qos: rl_qos
