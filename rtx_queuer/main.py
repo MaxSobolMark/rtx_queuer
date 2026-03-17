@@ -63,34 +63,41 @@ class Queuer:
         return submitted
 
     def handle_deallocation(self, jobs: list, blocked_external: list) -> int:
-        """Cancel running jobs to free GPUs for blocked external jobs.
+        """Cancel jobs to free GPUs for blocked external jobs.
 
         Returns number of jobs cancelled.
         """
         if not blocked_external:
             return 0
 
-        gpus_needed = sum(j.gpus for j in blocked_external)
         my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
+        my_pending = [j for j in my_jobs if j.is_pending]
         my_running = [j for j in my_jobs if j.is_running]
 
-        # Only cancel if we have running jobs that could be blocking
-        gpus_to_free = min(gpus_needed, len(my_running))
-        if gpus_to_free <= 0:
-            return 0
-
-        # Log details about who is requesting GPUs
-        requesters = []
-        for job in blocked_external:
-            requesters.append(f"{job.user}:{job.job_id}({job.name}, {job.gpus}gpu)")
-        log(f"External jobs blocked on resources, freeing {gpus_to_free} GPUs. Requested by: {', '.join(requesters)}")
-
-        to_cancel = select_jobs_to_cancel(my_jobs, gpus_to_free)
         cancelled = 0
-        for job in to_cancel:
-            if cancel_job(job.job_id):
-                log(f"Cancelled job {job.job_id} ({job.name})")
-                cancelled += 1
+
+        # Always cancel ALL pending queuer jobs so they don't compete with external jobs
+        if my_pending:
+            log(f"Cancelling {len(my_pending)} pending jobs to yield to external jobs")
+            for job in my_pending:
+                if cancel_job(job.job_id):
+                    log(f"Cancelled pending job {job.job_id} ({job.name})")
+                    cancelled += 1
+
+        # Cancel running jobs to free GPUs for jobs blocked on Resources
+        blocked_on_resources = [j for j in blocked_external if j.pending_reason == "Resources"]
+        if blocked_on_resources and my_running:
+            gpus_needed = sum(j.gpus for j in blocked_on_resources)
+            gpus_to_free = min(gpus_needed, sum(j.gpus for j in my_running))
+
+            requesters = [f"{j.user}:{j.job_id}({j.name}, {j.gpus}gpu)" for j in blocked_on_resources]
+            log(f"Freeing {gpus_to_free} GPUs for: {', '.join(requesters)}")
+
+            to_cancel = select_jobs_to_cancel(my_jobs, gpus_to_free)
+            for job in to_cancel:
+                if cancel_job(job.job_id):
+                    log(f"Cancelled running job {job.job_id} ({job.name})")
+                    cancelled += 1
 
         return cancelled
 

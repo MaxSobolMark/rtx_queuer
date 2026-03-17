@@ -25,8 +25,12 @@ class Job:
 
     @property
     def is_blocked_on_resources(self) -> bool:
-        """True if job is pending because it's waiting for resources (GPUs)."""
-        return self.is_pending and self.pending_reason == "Resources"
+        """True if job is pending because it's waiting for resources (GPUs).
+
+        Includes both 'Resources' (GPUs in use) and 'Priority' (behind other
+        pending jobs in queue) - both mean the job needs us to yield.
+        """
+        return self.is_pending and self.pending_reason in ("Resources", "Priority")
 
 
 def run_command(cmd: list[str]) -> str:
