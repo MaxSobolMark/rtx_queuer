@@ -78,7 +78,8 @@ class Queuer:
 
         # Always cancel ALL pending queuer jobs so they don't compete with external jobs
         if my_pending:
-            log(f"Cancelling {len(my_pending)} pending jobs to yield to external jobs")
+            yielding_to = [f"{j.user}:{j.job_id}" for j in blocked_external]
+            log(f"Cancelling {len(my_pending)} pending jobs to yield to external jobs: {', '.join(yielding_to)}")
             for job in my_pending:
                 if cancel_job(job.job_id):
                     log(f"Cancelled pending job {job.job_id} ({job.name})")
@@ -112,7 +113,7 @@ class Queuer:
         log(f"Status: {running} running, {pending} pending, target={self.config.target_jobs}")
 
         # Deallocate if external jobs are blocked on resources
-        blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix)
+        blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix, self.config.partition)
         if blocked_external:
             self.handle_deallocation(jobs, blocked_external)
 
