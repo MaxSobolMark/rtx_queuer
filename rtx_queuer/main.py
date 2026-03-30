@@ -112,16 +112,26 @@ class Queuer:
 
         log(f"Status: {running} running, {pending} pending, target={self.config.target_jobs}")
 
-        # Deallocate if external jobs are blocked on resources
+        # Check for blocked external jobs
         blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix, self.config.partition)
+
+        # Calculate how many pending jobs will be cancelled
+        pending_to_cancel = 0
+        if blocked_external:
+            my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
+            pending_to_cancel = len([j for j in my_jobs if j.is_pending])
+
+        # Submit jobs FIRST (before cancelling) to ensure queue is never empty
+        # Account for pending jobs that will be cancelled
+        effective_total = total - pending_to_cancel
+        if effective_total < self.config.target_jobs:
+            to_submit = self.config.target_jobs - effective_total
+            log(f"Submitting {to_submit} jobs" + (f" (replacing {pending_to_cancel} to be cancelled)" if pending_to_cancel else ""))
+            self.submit_placeholder_jobs(to_submit)
+
+        # Then deallocate (cancel pending and running jobs as needed)
         if blocked_external:
             self.handle_deallocation(jobs, blocked_external)
-
-        # Always submit up to target - SLURM priority ensures external jobs get resources first
-        if total < self.config.target_jobs:
-            to_submit = self.config.target_jobs - total
-            log(f"Under target, submitting {to_submit} jobs")
-            self.submit_placeholder_jobs(to_submit)
 
     def run(self) -> None:
         """Run the daemon loop."""
