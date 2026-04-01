@@ -92,14 +92,19 @@ class Queuer:
 
         cancelled = 0
 
-        # Cancel old pending queuer jobs so they don't compete with external jobs
-        if my_pending:
-            yielding_to = [f"{j.user}:{j.job_id}" for j in blocked_external]
-            log(f"Cancelling {len(my_pending)} pending jobs to yield to external jobs: {', '.join(yielding_to)}")
-            for job in my_pending:
-                if cancel_job(job.job_id):
-                    log(f"Cancelled pending job {job.job_id} ({job.name})")
-                    cancelled += 1
+        # Cancel pending queuer jobs only if they have higher priority (lower job_id)
+        # than blocked external jobs - jobs submitted later don't block earlier ones
+        if my_pending and blocked_external:
+            min_external_job_id = min(int(j.job_id) for j in blocked_external)
+            blocking_pending = [j for j in my_pending if int(j.job_id) < min_external_job_id]
+
+            if blocking_pending:
+                yielding_to = [f"{j.user}:{j.job_id}" for j in blocked_external]
+                log(f"Cancelling {len(blocking_pending)} pending jobs (higher priority than external) to yield to: {', '.join(yielding_to)}")
+                for job in blocking_pending:
+                    if cancel_job(job.job_id):
+                        log(f"Cancelled pending job {job.job_id} ({job.name})")
+                        cancelled += 1
 
         # Cancel running jobs to free GPUs for jobs blocked on Resources
         blocked_on_resources = [j for j in blocked_external if j.pending_reason == "Resources"]
@@ -132,13 +137,28 @@ class Queuer:
         blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix, self.config.partition)
 
         if blocked_external:
-            # Get list of current pending job IDs (to cancel later)
+            # Get list of current pending job IDs
             my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
             old_pending = [j for j in my_jobs if j.is_pending]
             old_pending_ids = {j.job_id for j in old_pending}
 
+            # Only cancel pending jobs that have higher priority (lower job_id) than external jobs
+            min_external_job_id = min(int(j.job_id) for j in blocked_external)
+            pending_to_cancel = [j for j in old_pending if int(j.job_id) < min_external_job_id]
+
+            if not pending_to_cancel:
+                # Our pending jobs have lower priority - they're not blocking external jobs
+                # Just maintain target count like normal
+                if total < self.config.target_jobs:
+                    to_submit = self.config.target_jobs - total
+                    log(f"Under target, submitting {to_submit} jobs")
+                    self.submit_placeholder_jobs(to_submit)
+                return
+
+            pending_ids_to_cancel = {j.job_id for j in pending_to_cancel}
+
             # Submit replacement jobs first (enough to maintain target after cancellation)
-            to_submit = max(len(old_pending), self.config.target_jobs - running)
+            to_submit = max(len(pending_to_cancel), self.config.target_jobs - running)
             if to_submit > 0:
                 log(f"Submitting {to_submit} jobs before yielding")
                 self.submit_placeholder_jobs(to_submit)
@@ -150,7 +170,7 @@ class Queuer:
 
             if new_pending:
                 log(f"Confirmed {len(new_pending)} new jobs in queue, proceeding with cancellation")
-                self.handle_deallocation(fresh_jobs, blocked_external, old_pending_ids)
+                self.handle_deallocation(fresh_jobs, blocked_external, pending_ids_to_cancel)
             else:
                 log("WARNING: New jobs not yet visible in queue, skipping cancellation this cycle")
         else:
