@@ -115,23 +115,34 @@ class Queuer:
         # Check for blocked external jobs
         blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix, self.config.partition)
 
-        # Calculate how many pending jobs will be cancelled
-        pending_to_cancel = 0
         if blocked_external:
+            # Get list of current pending job IDs (to cancel later)
             my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
-            pending_to_cancel = len([j for j in my_jobs if j.is_pending])
+            old_pending = [j for j in my_jobs if j.is_pending]
+            old_pending_ids = {j.job_id for j in old_pending}
 
-        # Submit jobs FIRST (before cancelling) to ensure queue is never empty
-        # Account for pending jobs that will be cancelled
-        effective_total = total - pending_to_cancel
-        if effective_total < self.config.target_jobs:
-            to_submit = self.config.target_jobs - effective_total
-            log(f"Submitting {to_submit} jobs" + (f" (replacing {pending_to_cancel} to be cancelled)" if pending_to_cancel else ""))
-            self.submit_placeholder_jobs(to_submit)
+            # Submit replacement jobs first (enough to maintain target after cancellation)
+            to_submit = max(len(old_pending), self.config.target_jobs - running)
+            if to_submit > 0:
+                log(f"Submitting {to_submit} jobs before yielding")
+                self.submit_placeholder_jobs(to_submit)
 
-        # Then deallocate (cancel pending and running jobs as needed)
-        if blocked_external:
-            self.handle_deallocation(jobs, blocked_external)
+            # Re-query queue and only cancel if new jobs are confirmed in queue
+            fresh_jobs = get_queue_status(self.config.partition)
+            fresh_my_jobs = get_my_jobs(fresh_jobs, self.config.job_prefix, self.config.queuer_index)
+            new_pending = [j for j in fresh_my_jobs if j.is_pending and j.job_id not in old_pending_ids]
+
+            if new_pending:
+                log(f"Confirmed {len(new_pending)} new jobs in queue, proceeding with cancellation")
+                self.handle_deallocation(fresh_jobs, blocked_external)
+            else:
+                log("WARNING: New jobs not yet visible in queue, skipping cancellation this cycle")
+        else:
+            # No external jobs blocked - just maintain target count
+            if total < self.config.target_jobs:
+                to_submit = self.config.target_jobs - total
+                log(f"Under target, submitting {to_submit} jobs")
+                self.submit_placeholder_jobs(to_submit)
 
     def run(self) -> None:
         """Run the daemon loop."""
