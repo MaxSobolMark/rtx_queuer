@@ -62,8 +62,19 @@ class Queuer:
                 submitted += 1
         return submitted
 
-    def handle_deallocation(self, jobs: list, blocked_external: list) -> int:
+    def handle_deallocation(
+        self,
+        jobs: list,
+        blocked_external: list,
+        pending_ids_to_cancel: set[str] | None = None,
+    ) -> int:
         """Cancel jobs to free GPUs for blocked external jobs.
+
+        Args:
+            jobs: Current queue status
+            blocked_external: External jobs that are blocked
+            pending_ids_to_cancel: If provided, only cancel pending jobs with these IDs
+                (used to avoid cancelling newly submitted replacement jobs)
 
         Returns number of jobs cancelled.
         """
@@ -71,12 +82,17 @@ class Queuer:
             return 0
 
         my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
-        my_pending = [j for j in my_jobs if j.is_pending]
         my_running = [j for j in my_jobs if j.is_running]
+
+        # Filter pending jobs to only those we should cancel
+        if pending_ids_to_cancel is not None:
+            my_pending = [j for j in my_jobs if j.is_pending and j.job_id in pending_ids_to_cancel]
+        else:
+            my_pending = [j for j in my_jobs if j.is_pending]
 
         cancelled = 0
 
-        # Always cancel ALL pending queuer jobs so they don't compete with external jobs
+        # Cancel old pending queuer jobs so they don't compete with external jobs
         if my_pending:
             yielding_to = [f"{j.user}:{j.job_id}" for j in blocked_external]
             log(f"Cancelling {len(my_pending)} pending jobs to yield to external jobs: {', '.join(yielding_to)}")
@@ -94,7 +110,7 @@ class Queuer:
             requesters = [f"{j.user}:{j.job_id}({j.name}, {j.gpus}gpu)" for j in blocked_on_resources]
             log(f"Freeing {gpus_to_free} GPUs for: {', '.join(requesters)}")
 
-            to_cancel = select_jobs_to_cancel(my_jobs, gpus_to_free)
+            to_cancel = select_jobs_to_cancel(my_running, gpus_to_free)
             for job in to_cancel:
                 if cancel_job(job.job_id):
                     log(f"Cancelled running job {job.job_id} ({job.name})")
@@ -134,7 +150,7 @@ class Queuer:
 
             if new_pending:
                 log(f"Confirmed {len(new_pending)} new jobs in queue, proceeding with cancellation")
-                self.handle_deallocation(fresh_jobs, blocked_external)
+                self.handle_deallocation(fresh_jobs, blocked_external, old_pending_ids)
             else:
                 log("WARNING: New jobs not yet visible in queue, skipping cancellation this cycle")
         else:
