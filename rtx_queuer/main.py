@@ -106,13 +106,12 @@ class Queuer:
                         log(f"Cancelled pending job {job.job_id} ({job.name})")
                         cancelled += 1
 
-        # Cancel running jobs to free GPUs for jobs blocked on Resources
-        blocked_on_resources = [j for j in blocked_external if j.pending_reason == "Resources"]
-        if blocked_on_resources and my_running:
-            gpus_needed = sum(j.gpus for j in blocked_on_resources)
+        # Cancel running jobs to free GPUs for blocked external jobs
+        if blocked_external and my_running:
+            gpus_needed = sum(j.gpus for j in blocked_external)
             gpus_to_free = min(gpus_needed, sum(j.gpus for j in my_running))
 
-            requesters = [f"{j.user}:{j.job_id}({j.name}, {j.gpus}gpu)" for j in blocked_on_resources]
+            requesters = [f"{j.user}:{j.job_id}({j.name}, {j.gpus}gpu)" for j in blocked_external]
             log(f"Freeing {gpus_to_free} GPUs for: {', '.join(requesters)}")
 
             to_cancel = select_jobs_to_cancel(my_running, gpus_to_free)
