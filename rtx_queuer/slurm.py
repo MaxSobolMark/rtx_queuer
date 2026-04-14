@@ -29,8 +29,12 @@ class Job:
 
         Includes both 'Resources' (GPUs in use) and 'Priority' (behind other
         pending jobs in queue) - both mean the job needs us to yield.
+        'QOSMaxJobsPerUserLimit' is also included since queuer jobs count
+        against the user's job limit.
         """
-        return self.is_pending and self.pending_reason in ("Resources", "Priority")
+        return self.is_pending and self.pending_reason in (
+            "Resources", "Priority", "QOSMaxJobsPerUserLimit"
+        )
 
 
 def run_command(cmd: list[str]) -> str:

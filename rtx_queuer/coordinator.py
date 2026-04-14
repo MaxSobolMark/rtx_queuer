@@ -46,10 +46,10 @@ def get_pending_external_jobs(jobs: list[Job], prefix: str) -> list[Job]:
 
 
 def get_external_jobs_blocked_on_resources(jobs: list[Job], prefix: str, partition: str) -> list[Job]:
-    """Get external jobs that are actually blocked waiting for GPUs.
+    """Get external jobs that are actually blocked waiting for GPUs or job limits.
 
     Only these jobs need us to deallocate - jobs pending for other reasons
-    (Priority, QOS limits, etc.) are not blocked by our jobs.
+    are not blocked by our jobs.
     """
     return [
         j for j in jobs
