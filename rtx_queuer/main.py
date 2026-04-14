@@ -145,33 +145,28 @@ class Queuer:
             min_external_job_id = min(int(j.job_id) for j in blocked_external)
             pending_to_cancel = [j for j in old_pending if int(j.job_id) < min_external_job_id]
 
-            if not pending_to_cancel:
-                # Our pending jobs have lower priority - they're not blocking external jobs
-                # Just maintain target count like normal
-                if total < self.config.target_jobs:
-                    to_submit = self.config.target_jobs - total
-                    log(f"Under target, submitting {to_submit} jobs")
+            pending_ids_to_cancel = {j.job_id for j in pending_to_cancel} if pending_to_cancel else None
+
+            if pending_to_cancel:
+                # Submit replacement jobs first (enough to maintain target after cancellation)
+                to_submit = max(len(pending_to_cancel), self.config.target_jobs - running)
+                if to_submit > 0:
+                    log(f"Submitting {to_submit} jobs before yielding")
                     self.submit_placeholder_jobs(to_submit)
-                return
 
-            pending_ids_to_cancel = {j.job_id for j in pending_to_cancel}
+                # Re-query queue and only cancel if new jobs are confirmed in queue
+                fresh_jobs = get_queue_status(self.config.partition)
+                fresh_my_jobs = get_my_jobs(fresh_jobs, self.config.job_prefix, self.config.queuer_index)
+                new_pending = [j for j in fresh_my_jobs if j.is_pending and j.job_id not in old_pending_ids]
 
-            # Submit replacement jobs first (enough to maintain target after cancellation)
-            to_submit = max(len(pending_to_cancel), self.config.target_jobs - running)
-            if to_submit > 0:
-                log(f"Submitting {to_submit} jobs before yielding")
-                self.submit_placeholder_jobs(to_submit)
-
-            # Re-query queue and only cancel if new jobs are confirmed in queue
-            fresh_jobs = get_queue_status(self.config.partition)
-            fresh_my_jobs = get_my_jobs(fresh_jobs, self.config.job_prefix, self.config.queuer_index)
-            new_pending = [j for j in fresh_my_jobs if j.is_pending and j.job_id not in old_pending_ids]
-
-            if new_pending:
-                log(f"Confirmed {len(new_pending)} new jobs in queue, proceeding with cancellation")
-                self.handle_deallocation(fresh_jobs, blocked_external, pending_ids_to_cancel)
+                if new_pending:
+                    log(f"Confirmed {len(new_pending)} new jobs in queue, proceeding with cancellation")
+                    self.handle_deallocation(fresh_jobs, blocked_external, pending_ids_to_cancel)
+                else:
+                    log("WARNING: New jobs not yet visible in queue, skipping cancellation this cycle")
             else:
-                log("WARNING: New jobs not yet visible in queue, skipping cancellation this cycle")
+                # No pending jobs to cancel, but still need to check running jobs
+                self.handle_deallocation(jobs, blocked_external, None)
         else:
             # No external jobs blocked - just maintain target count
             if total < self.config.target_jobs:
