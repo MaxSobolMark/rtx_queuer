@@ -13,7 +13,7 @@ from .coordinator import (
     get_my_jobs,
     select_jobs_to_cancel,
 )
-from .slurm import cancel_job, get_queue_status, submit_job
+from .slurm import Job, cancel_job, get_queue_status, submit_job
 
 
 def generate_job_name(prefix: str, index: int) -> str:
@@ -32,13 +32,6 @@ class Queuer:
     def __init__(self, config: Config):
         self.config = config
         self.running = True
-
-    def get_my_job_count(self, jobs: list) -> tuple[int, int]:
-        """Return (running_count, pending_count) for this queuer's jobs."""
-        my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
-        running = sum(1 for j in my_jobs if j.is_running)
-        pending = sum(1 for j in my_jobs if j.is_pending)
-        return running, pending
 
     def submit_placeholder_jobs(self, count: int) -> int:
         """Submit placeholder jobs. Returns number successfully submitted."""
@@ -62,119 +55,99 @@ class Queuer:
                 submitted += 1
         return submitted
 
-    def handle_deallocation(
-        self,
-        jobs: list,
-        blocked_external: list,
-        pending_ids_to_cancel: set[str] | None = None,
-    ) -> int:
-        """Cancel jobs to free GPUs for blocked external jobs.
-
-        Args:
-            jobs: Current queue status
-            blocked_external: External jobs that are blocked
-            pending_ids_to_cancel: If provided, only cancel pending jobs with these IDs
-                (used to avoid cancelling newly submitted replacement jobs)
-
-        Returns number of jobs cancelled.
-        """
-        if not blocked_external:
-            return 0
-
-        my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
-        my_running = [j for j in my_jobs if j.is_running]
-
-        # Filter pending jobs to only those we should cancel
-        if pending_ids_to_cancel is not None:
-            my_pending = [j for j in my_jobs if j.is_pending and j.job_id in pending_ids_to_cancel]
-        else:
-            my_pending = [j for j in my_jobs if j.is_pending]
-
+    def cancel_jobs(self, jobs_to_cancel: list[Job], reason: str) -> int:
+        """Cancel a list of jobs. Returns number cancelled."""
         cancelled = 0
-
-        # Cancel pending queuer jobs only if they have higher priority (lower job_id)
-        # than blocked external jobs - jobs submitted later don't block earlier ones
-        if my_pending and blocked_external:
-            min_external_job_id = min(int(j.job_id) for j in blocked_external)
-            blocking_pending = [j for j in my_pending if int(j.job_id) < min_external_job_id]
-
-            if blocking_pending:
-                yielding_to = [f"{j.user}:{j.job_id}" for j in blocked_external]
-                log(f"Cancelling {len(blocking_pending)} pending jobs (higher priority than external) to yield to: {', '.join(yielding_to)}")
-                for job in blocking_pending:
-                    if cancel_job(job.job_id):
-                        log(f"Cancelled pending job {job.job_id} ({job.name})")
-                        cancelled += 1
-
-        # Cancel running jobs to free GPUs for blocked external jobs
-        if blocked_external and my_running:
-            gpus_needed = sum(j.gpus for j in blocked_external)
-            gpus_to_free = min(gpus_needed, sum(j.gpus for j in my_running))
-
-            requesters = [f"{j.user}:{j.job_id}({j.name}, {j.gpus}gpu)" for j in blocked_external]
-            log(f"Freeing {gpus_to_free} GPUs for: {', '.join(requesters)}")
-
-            to_cancel = select_jobs_to_cancel(my_running, gpus_to_free)
-            for job in to_cancel:
-                if cancel_job(job.job_id):
-                    log(f"Cancelled running job {job.job_id} ({job.name})")
-                    cancelled += 1
-
+        for job in jobs_to_cancel:
+            if cancel_job(job.job_id):
+                log(f"Cancelled {job.job_id} ({job.name}) - {reason}")
+                cancelled += 1
         return cancelled
 
     def run_once(self) -> None:
         """Run a single iteration of the daemon loop."""
         jobs = get_queue_status(self.config.partition)
+        my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
+        my_running = [j for j in my_jobs if j.is_running]
+        my_pending = [j for j in my_jobs if j.is_pending]
+        total = len(my_running) + len(my_pending)
 
-        # Check current job counts
-        running, pending = self.get_my_job_count(jobs)
-        total = running + pending
+        log(f"Status: {len(my_running)} running, {len(my_pending)} pending, target={self.config.target_jobs}")
 
-        log(f"Status: {running} running, {pending} pending, target={self.config.target_jobs}")
+        blocked_external = get_external_jobs_blocked_on_resources(
+            jobs, self.config.job_prefix, self.config.partition
+        )
 
-        # Check for blocked external jobs
-        blocked_external = get_external_jobs_blocked_on_resources(jobs, self.config.job_prefix, self.config.partition)
-
-        if blocked_external:
-            # Get list of current pending job IDs
-            my_jobs = get_my_jobs(jobs, self.config.job_prefix, self.config.queuer_index)
-            old_pending = [j for j in my_jobs if j.is_pending]
-            old_pending_ids = {j.job_id for j in old_pending}
-
-            # Only cancel pending jobs that have higher priority (lower job_id) than external jobs
-            min_external_job_id = min(int(j.job_id) for j in blocked_external)
-            pending_to_cancel = [j for j in old_pending if int(j.job_id) < min_external_job_id]
-
-            pending_ids_to_cancel = {j.job_id for j in pending_to_cancel} if pending_to_cancel else None
-
-            # Always submit replacement jobs first before any cancellation,
-            # so there is never a moment with no queuer jobs in the queue.
-            gpus_to_free = sum(j.gpus for j in blocked_external)
-            to_submit = max(
-                len(pending_to_cancel),
-                self.config.target_jobs - running,
-                gpus_to_free,  # ensure we have pending slots to absorb freed GPUs
-            )
-            if to_submit > 0:
-                log(f"Submitting {to_submit} replacement jobs before yielding")
-                self.submit_placeholder_jobs(to_submit)
-
-            # Re-query queue and only cancel if new jobs are confirmed in queue
-            fresh_jobs = get_queue_status(self.config.partition)
-            fresh_my_jobs = get_my_jobs(fresh_jobs, self.config.job_prefix, self.config.queuer_index)
-            new_pending = [j for j in fresh_my_jobs if j.is_pending and j.job_id not in old_pending_ids]
-
-            if new_pending:
-                log(f"Confirmed {len(new_pending)} new jobs in queue, proceeding with cancellation")
-                self.handle_deallocation(fresh_jobs, blocked_external, pending_ids_to_cancel)
-            else:
-                log("WARNING: New jobs not yet visible in queue, skipping cancellation this cycle")
-        else:
-            # No external jobs blocked - just maintain target count
+        if not blocked_external:
+            # Normal operation: maintain target count
             if total < self.config.target_jobs:
                 to_submit = self.config.target_jobs - total
                 log(f"Under target, submitting {to_submit} jobs")
                 self.submit_placeholder_jobs(to_submit)
+            return
+
+        # External jobs are blocked - need to yield
+        # Separate by blocking reason
+        qos_blocked = [j for j in blocked_external if j.pending_reason == "QOSMaxJobsPerUserLimit"]
+        resource_blocked = [j for j in blocked_external if j.pending_reason in ("Resources", "Priority")]
+
+        # Handle QOSMaxJobsPerUserLimit: reduce total job count (no replacement)
+        if qos_blocked:
+            ext = qos_blocked[0]
+            log(f"External job {ext.user}:{ext.job_id} blocked by QOS limit")
+            if my_running:
+                # Cancel one running job to free a slot
+                self.cancel_jobs([my_running[-1]], "freeing QOS slot")
+            elif my_pending:
+                # Cancel one pending job
+                self.cancel_jobs([my_pending[-1]], "freeing QOS slot")
+            return
+
+        # Handle Resources/Priority: free GPUs while maintaining queue presence
+        if not resource_blocked:
+            return
+
+        gpus_needed = sum(j.gpus for j in resource_blocked)
+        gpus_available = sum(j.gpus for j in my_running)
+
+        if gpus_available == 0:
+            # No running jobs to cancel
+            return
+
+        # Determine which running jobs to cancel
+        running_to_cancel = select_jobs_to_cancel(my_running, gpus_needed)
+        if not running_to_cancel:
+            return
+
+        # Calculate job counts after cancellation
+        running_after = len(my_running) - len(running_to_cancel)
+        pending_needed = self.config.target_jobs - running_after
+        to_submit = max(0, pending_needed - len(my_pending))
+
+        # Ensure at least 1 pending job so we never have zero queue presence
+        if len(my_pending) + to_submit < 1:
+            to_submit = 1
+
+        # Submit replacement jobs first
+        if to_submit > 0:
+            log(f"Submitting {to_submit} replacement jobs before yielding")
+            self.submit_placeholder_jobs(to_submit)
+
+            # Confirm we have pending jobs before cancelling
+            fresh_jobs = get_queue_status(self.config.partition)
+            fresh_my = get_my_jobs(fresh_jobs, self.config.job_prefix, self.config.queuer_index)
+            if not any(j.is_pending for j in fresh_my):
+                log("WARNING: No pending jobs confirmed in queue, skipping cancellation")
+                return
+        elif len(my_pending) == 0:
+            # We have no pending and aren't submitting any - unsafe to cancel
+            log("WARNING: No pending jobs in queue, skipping cancellation")
+            return
+
+        # Now safe to cancel running jobs
+        requesters = [f"{j.user}:{j.job_id}" for j in resource_blocked]
+        log(f"Freeing GPUs for: {', '.join(requesters)}")
+        self.cancel_jobs(running_to_cancel, "freeing GPUs")
 
     def run(self) -> None:
         """Run the daemon loop."""
