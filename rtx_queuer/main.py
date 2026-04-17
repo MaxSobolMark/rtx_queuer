@@ -96,23 +96,24 @@ class Queuer:
             ext = qos_blocked[0]
             log(f"External job {ext.user}:{ext.job_id} blocked by QOS limit")
             if my_running:
-                # Cancel one running job to free a slot
                 self.cancel_jobs([my_running[-1]], "freeing QOS slot")
+                return
             elif my_pending:
-                # Cancel one pending job
                 self.cancel_jobs([my_pending[-1]], "freeing QOS slot")
-            return
+                return
+            # If we have no jobs, fall through to normal submission
 
         # Handle Resources/Priority: free GPUs while maintaining queue presence
-        if not resource_blocked:
+        if not resource_blocked or not my_running:
+            # No resource-blocked jobs, or no running jobs to yield
+            # Just maintain target count normally
+            if total < self.config.target_jobs:
+                to_submit = self.config.target_jobs - total
+                log(f"Under target, submitting {to_submit} jobs")
+                self.submit_placeholder_jobs(to_submit)
             return
 
         gpus_needed = sum(j.gpus for j in resource_blocked)
-        gpus_available = sum(j.gpus for j in my_running)
-
-        if gpus_available == 0:
-            # No running jobs to cancel
-            return
 
         # Determine which running jobs to cancel
         running_to_cancel = select_jobs_to_cancel(my_running, gpus_needed)
