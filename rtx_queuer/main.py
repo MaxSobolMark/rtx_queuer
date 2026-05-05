@@ -91,17 +91,23 @@ class Queuer:
         qos_blocked = [j for j in blocked_external if j.pending_reason == "QOSMaxJobsPerUserLimit"]
         resource_blocked = [j for j in blocked_external if j.pending_reason in ("Resources", "Priority")]
 
-        # Handle QOSMaxJobsPerUserLimit: reduce total job count (no replacement)
+        # Handle QOSMaxJobsPerUserLimit: hold queue at (target - blocked count)
         if qos_blocked:
             ext = qos_blocked[0]
             log(f"External job {ext.user}:{ext.job_id} blocked by QOS limit")
-            if my_running:
-                self.cancel_jobs([my_running[-1]], "freeing QOS slot")
-                return
-            elif my_pending:
-                self.cancel_jobs([my_pending[-1]], "freeing QOS slot")
-                return
-            # If we have no jobs, fall through to normal submission
+            # Yield one slot per blocked external job, but never drain to zero
+            desired_total = max(1, self.config.target_jobs - len(qos_blocked))
+            if total > desired_total:
+                # Prefer cancelling pending placeholders over running work
+                if my_pending:
+                    self.cancel_jobs([my_pending[-1]], "freeing QOS slot")
+                elif my_running:
+                    self.cancel_jobs([my_running[-1]], "freeing QOS slot")
+            elif total < desired_total:
+                to_submit = desired_total - total
+                log(f"Under yield target ({desired_total}), submitting {to_submit} jobs")
+                self.submit_placeholder_jobs(to_submit)
+            return
 
         # Handle Resources/Priority: free GPUs while maintaining queue presence
         if not resource_blocked or not my_running:
